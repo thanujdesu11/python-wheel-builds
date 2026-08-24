@@ -50,7 +50,7 @@ Environment variables (defaults are enough for tested scale up to 2000 PLRs):
 | `COLLECTOR_TIMEOUT` | `30m` | Max metrics poll duration (~12 min for 2000 PLRs) |
 | `IDLE_EXIT` | `3` | Exit after N idle polls (pending=0, running=0) |
 
-Metrics are written to `metrics/batch-<timestamp>.{json,tsv,log}` (gitignored). Poll interval (5s) and snapshot frequency are fixed in the collector script. Without `-w`, the collector runs in the background.
+Metrics are written to `metrics/batch-<timestamp>.{json,csv,log}` (gitignored). Poll interval (5s) and snapshot frequency are fixed in the collector script. Without `-w`, the collector runs in the background.
 
 ## Verify results via KubeArchive
 
@@ -69,7 +69,7 @@ Use `finalize-batch-from-archive.py` after a batch finishes (do **not** rely on
   --batch batch-<timestamp> \
   --expected 1000 \
   --metrics-json metrics/batch-<timestamp>.json \
-  --tsv
+  --csv
 ```
 
 ## KONFLUX-15500 results (Aug 2026)
@@ -87,6 +87,6 @@ All steps succeeded (1, 10, 100, 200, 500, 1000, 2000 PLRs). Summary:
 | 2000 | 1451 | 497 | 1900 | 2000/2000 |
 
 Full results: [KONFLUX-15500 scale test spreadsheet](https://docs.google.com/spreadsheets/d/1JDOBUNgx4W7Rus34n5mpXbFQL8cfQCmXg1TZ2Rh-dxs/edit?usp=sharing).
-Local copy: [`results/scale-test-summary.tsv`](results/scale-test-summary.tsv)
+Local copy: [`results/scale-test-summary.csv`](results/scale-test-summary.csv)
 
 Key finding: parallel execution caps at ~497–498 running PLRs; higher N increases Kueue pending queue.

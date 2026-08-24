@@ -12,6 +12,7 @@ or succeeded (seen_terminal / seen_succeeded) so success counts survive pruning.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import subprocess
 import sys
@@ -21,6 +22,28 @@ from datetime import datetime, timezone
 POLL_INTERVAL = 5.0  # seconds between oc get polls
 SNAPSHOT_EVERY = 1  # rewrite metrics files every poll (crash-safe partial output)
 IDLE_EXIT = 3  # consecutive idle polls before exit when queue is drained
+
+SPREADSHEET_COLUMNS = [
+    "NSs",
+    "PLRs per NS",
+    "PLRs expected",
+    "PLRs created",
+    "PLRs failed creation",
+    "PLRs collected",
+    "PLRs failed collection",
+    ".pending.avg",
+    ".pending.p99",
+    ".pending.max",
+    ".running.avg",
+    ".running.p99",
+    ".running.max",
+    ".total.avg",
+    ".total.p99",
+    ".total.max",
+    ".total.data | length",
+    ".Succeeded.total",
+    ".Succeeded.True",
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -38,7 +61,7 @@ def parse_args() -> argparse.Namespace:
         help="Exit after N consecutive polls with pending=0 and running=0",
     )
     parser.add_argument("--output", help="Write full JSON metrics here")
-    parser.add_argument("--tsv-output", help="Write one spreadsheet TSV row here")
+    parser.add_argument("--csv-output", help="Write one spreadsheet CSV row here")
     parser.add_argument("--quiet", action="store_true", help="Do not print JSON to stdout")
     return parser.parse_args()
 
@@ -183,41 +206,39 @@ def build_metrics(
     }
 
 
-def format_tsv_row(metrics: dict) -> str:
+def spreadsheet_row_values(metrics: dict) -> list:
     """One row for the KONFLUX-15500 scale-test spreadsheet."""
-    return "\t".join(
-        str(v)
-        for v in [
-            metrics["expected"],  # NSs=1, PLRs per NS
-            metrics["expected"],
-            metrics["created"],
-            metrics["failed_creation"],
-            metrics["collected"],
-            metrics["failed_collection"],
-            metrics["pending"]["avg"],
-            metrics["pending"]["p99"],
-            metrics["pending"]["max"],
-            metrics["running"]["avg"],
-            metrics["running"]["p99"],
-            metrics["running"]["max"],
-            metrics["total"]["avg"],
-            metrics["total"]["p99"],
-            metrics["total"]["max"],
-            len(metrics["total"]["data"]),
-            metrics["Succeeded"]["total"],
-            metrics["Succeeded"]["True"],
-        ]
-    )
+    return [
+        metrics["expected"],  # NSs=1, PLRs per NS
+        metrics["expected"],
+        metrics["created"],
+        metrics["failed_creation"],
+        metrics["collected"],
+        metrics["failed_collection"],
+        metrics["pending"]["avg"],
+        metrics["pending"]["p99"],
+        metrics["pending"]["max"],
+        metrics["running"]["avg"],
+        metrics["running"]["p99"],
+        metrics["running"]["max"],
+        metrics["total"]["avg"],
+        metrics["total"]["p99"],
+        metrics["total"]["max"],
+        len(metrics["total"]["data"]),
+        metrics["Succeeded"]["total"],
+        metrics["Succeeded"]["True"],
+    ]
 
 
-def write_snapshot(metrics: dict, *, output: str | None, tsv_output: str | None) -> None:
+def write_snapshot(metrics: dict, *, output: str | None, csv_output: str | None) -> None:
     if output:
         with open(output, "w", encoding="utf-8") as handle:
             json.dump(metrics, handle, indent=2)
-    if tsv_output:
-        with open(tsv_output, "w", encoding="utf-8") as handle:
-            handle.write(format_tsv_row(metrics))
-            handle.write("\n")
+    if csv_output:
+        with open(csv_output, "w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(SPREADSHEET_COLUMNS)
+            writer.writerow(spreadsheet_row_values(metrics))
 
 
 def main() -> int:
@@ -292,7 +313,7 @@ def main() -> int:
                     exit_reason="running",
                 ),
                 output=args.output,
-                tsv_output=args.tsv_output,
+                csv_output=args.csv_output,
             )
 
         # Fast path: every created PLR is still in the cluster and terminal.
@@ -322,12 +343,12 @@ def main() -> int:
         seen_succeeded=seen_succeeded,
         exit_reason=exit_reason,
     )
-    write_snapshot(metrics, output=args.output, tsv_output=args.tsv_output)
+    write_snapshot(metrics, output=args.output, csv_output=args.csv_output)
 
     if args.output:
         print(f"Wrote {args.output}", file=sys.stderr)
-    if args.tsv_output:
-        print(f"Wrote {args.tsv_output}", file=sys.stderr)
+    if args.csv_output:
+        print(f"Wrote {args.csv_output}", file=sys.stderr)
     if not args.quiet:
         print(json.dumps(metrics, indent=2))
 

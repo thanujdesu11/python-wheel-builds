@@ -77,7 +77,7 @@ failed_creation=0
 
 mkdir -p "$METRICS_DIR"
 metrics_json="$METRICS_DIR/${batch}.json"
-metrics_tsv="$METRICS_DIR/${batch}.tsv"
+metrics_csv="$METRICS_DIR/${batch}.csv"
 metrics_log="$METRICS_DIR/${batch}.log"
 
 echo "Creating $COUNT parallel PipelineRuns in $NS"
@@ -134,7 +134,7 @@ if [[ "$created" -eq 0 ]]; then
   exit 1
 fi
 
-echo "  metrics: $METRICS_DIR/${batch}.{json,tsv,log}"
+echo "  metrics: $METRICS_DIR/${batch}.{json,csv,log}"
 echo "Watch: oc -n $NS get pipelinerun -l konflux-perfscale/load-test=$batch -w"
 
 run_metrics_collector() {
@@ -147,17 +147,17 @@ run_metrics_collector() {
     --timeout "$COLLECTOR_TIMEOUT" \
     --idle-exit "$IDLE_EXIT" \
     --output "$metrics_json" \
-    --tsv-output "$metrics_tsv" \
+    --csv-output "$metrics_csv" \
     --quiet
 }
 
 if [[ "$WAIT" != "true" ]]; then
   echo
   echo "Starting metrics collection in background..."
-  run_metrics_collector > "$metrics_tsv" 2> "$metrics_log" &
+  run_metrics_collector 2> "$metrics_log" &
   echo "  PID:  $!"
   echo "  JSON: $metrics_json"
-  echo "  TSV:  $metrics_tsv"
+  echo "  CSV:  $metrics_csv"
   echo "  Log:  $metrics_log"
   echo "Use -w to wait in foreground and print the summary when done."
   exit 0
@@ -173,7 +173,7 @@ set -e
 echo
 echo "=== Metrics (batch=$batch) ==="
 echo "  JSON: $metrics_json"
-echo "  TSV:  $metrics_tsv"
+echo "  CSV:  $metrics_csv"
 echo "  Log:  $metrics_log"
 echo
 echo "=== PipelineRun summary (live cluster; may be pruned soon) ==="

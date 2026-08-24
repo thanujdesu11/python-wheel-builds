@@ -9,9 +9,32 @@ and merges live poll metrics with authoritative archived success counts.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import subprocess
 import sys
+
+SPREADSHEET_COLUMNS = [
+    "NSs",
+    "PLRs per NS",
+    "PLRs expected",
+    "PLRs created",
+    "PLRs failed creation",
+    "PLRs collected",
+    "PLRs failed collection",
+    ".pending.avg",
+    ".pending.p99",
+    ".pending.max",
+    ".running.avg",
+    ".running.p99",
+    ".running.max",
+    ".total.avg",
+    ".total.p99",
+    ".total.max",
+    ".total.data | length",
+    ".Succeeded.total",
+    ".Succeeded.True",
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -20,7 +43,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--namespace", default="konflux-perfscale")
     parser.add_argument("--expected", type=int, required=True)
     parser.add_argument("--metrics-json", help="Live metrics JSON from collect-plr-batch-metrics.py")
-    parser.add_argument("--tsv", action="store_true", help="Print spreadsheet row (needs --metrics-json)")
+    parser.add_argument("--csv", action="store_true", help="Print spreadsheet row (needs --metrics-json)")
     parser.add_argument("--output", help="Write combined JSON summary here")
     return parser.parse_args()
 
@@ -84,32 +107,29 @@ def count_outcomes(items: list[dict]) -> dict[str, int]:
     }
 
 
-def spreadsheet_row(metrics: dict, archive: dict, expected: int) -> str:
+def spreadsheet_row_values(metrics: dict, archive: dict, expected: int) -> list:
     """Spreadsheet row: concurrency from live poll, success from archive."""
-    return "\t".join(
-        str(v)
-        for v in [
-            1,  # NSs
-            expected,
-            expected,
-            metrics.get("created", expected),
-            metrics.get("failed_creation", 0),
-            metrics.get("collected", archive["archived_total"]),
-            metrics.get("failed_collection", 0),
-            metrics["pending"]["avg"],
-            metrics["pending"]["p99"],
-            metrics["pending"]["max"],
-            metrics["running"]["avg"],
-            metrics["running"]["p99"],
-            metrics["running"]["max"],
-            metrics["total"]["avg"],
-            metrics["total"]["p99"],
-            metrics["total"]["max"],
-            len(metrics["total"]["data"]),
-            archive["archived_total"],
-            archive["succeeded"],
-        ]
-    )
+    return [
+        1,  # NSs
+        expected,
+        expected,
+        metrics.get("created", expected),
+        metrics.get("failed_creation", 0),
+        metrics.get("collected", archive["archived_total"]),
+        metrics.get("failed_collection", 0),
+        metrics["pending"]["avg"],
+        metrics["pending"]["p99"],
+        metrics["pending"]["max"],
+        metrics["running"]["avg"],
+        metrics["running"]["p99"],
+        metrics["running"]["max"],
+        metrics["total"]["avg"],
+        metrics["total"]["p99"],
+        metrics["total"]["max"],
+        len(metrics["total"]["data"]),
+        archive["archived_total"],
+        archive["succeeded"],
+    ]
 
 
 def main() -> int:
@@ -138,11 +158,13 @@ def main() -> int:
 
     print(json.dumps(archive, indent=2))
 
-    if args.tsv:
+    if args.csv:
         if not live:
-            print("ERROR: --tsv requires --metrics-json", file=sys.stderr)
+            print("ERROR: --csv requires --metrics-json", file=sys.stderr)
             return 1
-        print(spreadsheet_row(live, archive, args.expected))
+        writer = csv.writer(sys.stdout)
+        writer.writerow(SPREADSHEET_COLUMNS)
+        writer.writerow(spreadsheet_row_values(live, archive, args.expected))
 
     if archive["archived_total"] < args.expected:
         print(
