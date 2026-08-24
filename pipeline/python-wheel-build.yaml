@@ -1,0 +1,143 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: python-wheel-build
+  namespace: konflux-perfscale
+spec:
+  description: |
+    Build Python wheels from source using Fromager and push as an OCI artifact.
+    Inlined taskSpec from calungaproject/plumbing build-python-wheels-oci-ta (no bundle resolver).
+  params:
+    - name: packages
+      description: List of pinned Python packages to build
+      type: array
+    - name: output-image
+      description: Fully qualified output image for the OCI artifact
+      type: string
+    - name: image-expires-after
+      description: Image tag expiration time (e.g. 1h, 2d, 3w)
+      type: string
+      default: ""
+  results:
+    - name: IMAGE_URL
+      description: OCI artifact URL
+      value: $(tasks.build-python-wheels.results.IMAGE_URL)
+    - name: IMAGE_DIGEST
+      description: OCI artifact digest
+      value: $(tasks.build-python-wheels.results.IMAGE_DIGEST)
+    - name: IMAGE_REF
+      description: OCI artifact reference
+      value: $(tasks.build-python-wheels.results.IMAGE_REF)
+  tasks:
+    - name: build-python-wheels
+      params:
+        - name: PACKAGES
+          value:
+            - $(params.packages[*])
+        - name: IMAGE
+          value: $(params.output-image)
+        - name: IMAGE_EXPIRES_AFTER
+          value: $(params.image-expires-after)
+      taskSpec:
+        params:
+          - name: PACKAGES
+            type: array
+          - name: IMAGE
+            type: string
+          - name: IMAGE_EXPIRES_AFTER
+            type: string
+            default: ""
+        results:
+          - name: IMAGE_DIGEST
+            description: Digest of the OCI artifact
+          - name: IMAGE_URL
+            description: OCI artifact repository and tag
+          - name: IMAGE_REF
+            description: OCI artifact reference
+        volumes:
+          - name: workdir
+            emptyDir: {}
+        stepTemplate:
+          computeResources:
+            limits:
+              cpu: "4"
+              memory: 4Gi
+            requests:
+              cpu: "4"
+              memory: 4Gi
+          volumeMounts:
+            - mountPath: /var/workdir
+              name: workdir
+        steps:
+          - name: build-wheels
+            image: quay.io/redhat-user-workloads/calunga-tenant/plumbing-builder@sha256:d0ed5c94153b4b6db0b39aa330747dc167e1e4ad98fe3dab844798dd06f586d9
+            workingDir: /var/workdir
+            args:
+              - --
+              - $(params.PACKAGES[*])
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              PACKAGE_ARGS=()
+              in_packages=false
+              for arg in "$@"; do
+                if [ "$arg" = "--" ]; then
+                  in_packages=true
+                  continue
+                fi
+                if [[ "$in_packages" == "true" ]]; then
+                  PACKAGE_ARGS+=("$arg")
+                fi
+              done
+              echo "[$(date --utc -Ins)] Building wheels for: ${PACKAGE_ARGS[*]}"
+              exec build-wheels "${PACKAGE_ARGS[@]}"
+          - name: collect-build-files
+            image: quay.io/redhat-user-workloads/calunga-tenant/plumbing-builder@sha256:d0ed5c94153b4b6db0b39aa330747dc167e1e4ad98fe3dab844798dd06f586d9
+            command:
+              - collect-build-files
+            args:
+              - /var/workdir/output
+              - /var/workdir/artifact
+          - name: create-oci-artifact
+            image: quay.io/konflux-ci/oras:latest@sha256:1beeecce012c99794568f74265c065839f9703d28306a8430b667f639343a98b
+            workingDir: /var/workdir
+            env:
+              - name: IMAGE
+                value: $(params.IMAGE)
+              - name: IMAGE_EXPIRES_AFTER
+                value: $(params.IMAGE_EXPIRES_AFTER)
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              echo "[$(date --utc -Ins)] Pushing OCI artifact"
+              select-oci-auth "$IMAGE" > auth.json
+              AUTHFILE="$(realpath auth.json)"
+              EXPIRE_LABEL=()
+              [ -n "$IMAGE_EXPIRES_AFTER" ] && EXPIRE_LABEL=("--annotation" "quay.expires-after=$IMAGE_EXPIRES_AFTER")
+              cd artifact
+              echo "Pushing OCI artifact to ${IMAGE}"
+              if ! retry oras push "$IMAGE" \
+                --registry-config "${AUTHFILE}" \
+                "${EXPIRE_LABEL[@]}" \
+                --artifact-type "application/vnd.python.wheels" \
+                *
+              then
+                echo "Failed to push OCI artifact ${IMAGE} to registry"
+                exit 1
+              fi
+              if ! RESULTING_DIGEST=$(retry oras resolve \
+                --registry-config "${AUTHFILE}" "${IMAGE}")
+              then
+                echo "Failed to get digest for ${IMAGE} from registry"
+                exit 1
+              fi
+              echo -n "$IMAGE" | tee "$(results.IMAGE_URL.path)"
+              echo -n "$RESULTING_DIGEST" | tee "$(results.IMAGE_DIGEST.path)"
+              echo -n "${IMAGE}@${RESULTING_DIGEST}" | tee "$(results.IMAGE_REF.path)"
+              echo "[$(date --utc -Ins)] End create-oci-artifact"
+            computeResources:
+              limits:
+                memory: 1Gi
+              requests:
+                cpu: "1"
+                memory: 1Gi

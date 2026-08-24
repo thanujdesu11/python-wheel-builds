@@ -1,0 +1,20 @@
+# Single PipelineRun example (not part of a scale-test batch).
+# Prefer run-python-wheels-parallel.sh for load tests.
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: python-wheel-build-run-
+  namespace: konflux-perfscale
+spec:
+  pipelineRef:
+    name: python-wheel-build
+  params:
+    - name: packages
+      value:
+        - "urllib3==2.5.0"
+    - name: output-image
+      value: quay.io/rhtap-perf-test/perf-release-service-trusted-artifacts-stage:python-wheel-urllib3-manual
+    - name: image-expires-after
+      value: "1d"
+  timeouts:
+    pipeline: 30m
