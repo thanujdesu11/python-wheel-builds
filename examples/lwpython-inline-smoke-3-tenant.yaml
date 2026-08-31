@@ -1,0 +1,160 @@
+# Inline LWPython smoke test for konflux-perfscale-3-tenant (KONFLUX-15401).
+# Does not use bundle resolver or PaC — same inlined pipelineSpec as probe template.
+#
+# Prerequisites:
+#   oc login to lightwell-dev
+#   quay-push-secret in konflux-perfscale-3-tenant
+#
+# Run:
+#   oc -n konflux-perfscale-3-tenant create -f examples/lwpython-inline-smoke-3-tenant.yaml
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: lwpython-inline-smoke-
+  namespace: konflux-perfscale-3-tenant
+  labels:
+    konflux-perfscale/test: lwpython-inline-smoke
+spec:
+  timeouts:
+    pipeline: 45m
+  params:
+    - name: packages
+      value:
+        - "urllib3==2.5.0"
+    - name: output-image
+      value: quay.io/rhtap-perf-test/perf-release-service-trusted-artifacts-stage:python-wheel-lwpython-inline-smoke
+    - name: image-expires-after
+      value: "7d"
+  pipelineSpec:
+    params:
+      - name: packages
+        type: array
+      - name: output-image
+        type: string
+      - name: image-expires-after
+        type: string
+        default: ""
+    results:
+      - name: IMAGE_URL
+        value: $(tasks.build-python-wheels.results.IMAGE_URL)
+      - name: IMAGE_DIGEST
+        value: $(tasks.build-python-wheels.results.IMAGE_DIGEST)
+      - name: IMAGE_REF
+        value: $(tasks.build-python-wheels.results.IMAGE_REF)
+    tasks:
+      - name: build-python-wheels
+        params:
+          - name: PACKAGES
+            value:
+              - $(params.packages[*])
+          - name: IMAGE
+            value: $(params.output-image)
+          - name: IMAGE_EXPIRES_AFTER
+            value: $(params.image-expires-after)
+        taskSpec:
+          params:
+            - name: PACKAGES
+              type: array
+            - name: IMAGE
+              type: string
+            - name: IMAGE_EXPIRES_AFTER
+              type: string
+              default: ""
+          results:
+            - name: IMAGE_DIGEST
+            - name: IMAGE_URL
+            - name: IMAGE_REF
+          volumes:
+            - name: workdir
+              emptyDir: {}
+            - name: quay-auth
+              secret:
+                secretName: quay-push-secret
+                items:
+                  - key: .dockerconfigjson
+                    path: config.json
+          stepTemplate:
+            computeResources:
+              limits:
+                cpu: "4"
+                memory: 4Gi
+              requests:
+                cpu: "4"
+                memory: 4Gi
+            volumeMounts:
+              - mountPath: /var/workdir
+                name: workdir
+          steps:
+            - name: build-wheels
+              image: quay.io/redhat-user-workloads/calunga-tenant/plumbing-builder@sha256:d0ed5c94153b4b6db0b39aa330747dc167e1e4ad98fe3dab844798dd06f586d9
+              workingDir: /var/workdir
+              args:
+                - --
+                - $(params.PACKAGES[*])
+              script: |
+                #!/bin/bash
+                set -euo pipefail
+                PACKAGE_ARGS=()
+                in_packages=false
+                for arg in "$@"; do
+                  if [ "$arg" = "--" ]; then
+                    in_packages=true
+                    continue
+                  fi
+                  if [[ "$in_packages" == "true" ]]; then
+                    PACKAGE_ARGS+=("$arg")
+                  fi
+                done
+                echo "[$(date --utc -Ins)] Building wheels for: ${PACKAGE_ARGS[*]}"
+                exec build-wheels "${PACKAGE_ARGS[@]}"
+            - name: collect-build-files
+              image: quay.io/redhat-user-workloads/calunga-tenant/plumbing-builder@sha256:d0ed5c94153b4b6db0b39aa330747dc167e1e4ad98fe3dab844798dd06f586d9
+              command:
+                - collect-build-files
+              args:
+                - /var/workdir/output
+                - /var/workdir/artifact
+            - name: create-oci-artifact
+              image: quay.io/konflux-ci/oras:latest@sha256:1beeecce012c99794568f74265c065839f9703d28306a8430b667f639343a98b
+              workingDir: /var/workdir
+              env:
+                - name: IMAGE
+                  value: $(params.IMAGE)
+                - name: IMAGE_EXPIRES_AFTER
+                  value: $(params.IMAGE_EXPIRES_AFTER)
+                - name: DOCKER_CONFIG
+                  value: /var/run/quay-auth
+              volumeMounts:
+                - name: quay-auth
+                  mountPath: /var/run/quay-auth
+                  readOnly: true
+              script: |
+                #!/bin/bash
+                set -euo pipefail
+                if select-oci-auth "$IMAGE" > auth.json 2>/dev/null && [ -s auth.json ]; then
+                  echo "Using select-oci-auth credentials"
+                else
+                  echo "Falling back to mounted quay-push-secret"
+                  cp /var/run/quay-auth/config.json auth.json
+                fi
+                AUTHFILE="$(realpath auth.json)"
+                EXPIRE_LABEL=()
+                [ -n "$IMAGE_EXPIRES_AFTER" ] && EXPIRE_LABEL=("--annotation" "quay.expires-after=$IMAGE_EXPIRES_AFTER")
+                cd artifact
+                retry oras push "$IMAGE" \
+                  --registry-config "${AUTHFILE}" \
+                  "${EXPIRE_LABEL[@]}" \
+                  --artifact-type "application/vnd.python.wheels" \
+                  *
+                RESULTING_DIGEST=$(retry oras resolve --registry-config "${AUTHFILE}" "${IMAGE}")
+                echo -n "$IMAGE" | tee "$(results.IMAGE_URL.path)"
+                echo -n "$RESULTING_DIGEST" | tee "$(results.IMAGE_DIGEST.path)"
+                echo -n "${IMAGE}@${RESULTING_DIGEST}" | tee "$(results.IMAGE_REF.path)"
+              computeResources:
+                limits:
+                  memory: 1Gi
+                requests:
+                  cpu: "1"
+                  memory: 1Gi
+  taskRunTemplate:
+    serviceAccountName: builder
